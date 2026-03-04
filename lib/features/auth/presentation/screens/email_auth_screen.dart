@@ -23,7 +23,6 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
   final _emailFocus = FocusNode();
   final _passwordFocus = FocusNode();
 
-  bool _isLogin = true; // true = Iniciar Sesión, false = Crear Cuenta
   bool _isLoading = false;
 
   @override
@@ -31,6 +30,46 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
     super.initState();
     _emailFocus.addListener(() => setState(() {}));
     _passwordFocus.addListener(() => setState(() {}));
+  }
+
+  // Separamos el diálogo en una función para mantener el código ordenado
+  void _showVerificationDialog() {
+    if (!mounted) return;
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('¡Revisa tu correo! 📩', textAlign: TextAlign.center),
+          content: const Text(
+            'Como eres un usuario nuevo, te enviamos un enlace de verificación. Ábrelo desde tu celular o computadora. Cuando lo hayas hecho, presiona el botón de abajo.',
+            textAlign: TextAlign.center,
+          ),
+          actions: [
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () {
+                  Navigator.pop(context); // Cierra el diálogo
+                  _submit(); // Intenta iniciar sesión automáticamente de nuevo
+                },
+                style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1A1A1A),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                ),
+                child: const Text('Ya verifiqué mi correo', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() => _passwordController.clear()); // Limpia la contraseña
+              },
+              child: const Text('Lo haré más tarde', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            )
+          ],
+        )
+    );
   }
 
   Future<void> _submit() async {
@@ -51,69 +90,37 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
     try {
       String? token;
 
-      if (_isLogin) {
-        // --- FLUJO 1: SOLO INICIAR SESIÓN ---
-        print('🔐 Iniciando sesión con correo...');
+      try {
+        // --- INTENTO 1: LOGIN DIRECTO ---
+        print('🔐 Intentando iniciar sesión...');
         token = await _authService.loginWithEmail(email, password);
 
-      } else {
-        // --- FLUJO 2: SOLO REGISTRAR ---
-        print('📝 Registrando cuenta nueva en Auth0...');
-        await _authService.signUpWithEmail(email, password);
+      } catch (loginError) {
+        // --- INTENTO 2: SI FALLA, INTENTAMOS REGISTRAR ---
+        print('⚠️ Login falló. Intentando registrar como cuenta nueva...');
+        try {
+          await _authService.signUpWithEmail(email, password);
+          print('✅ Registro exitoso. Pidiendo verificación...');
 
-        print('✅ Registro exitoso. Mostrando diálogo de verificación...');
-        setState(() => _isLoading = false);
+          setState(() => _isLoading = false);
+          _showVerificationDialog();
+          return; // Detenemos aquí hasta que el usuario verifique
 
-        // 🛑 Le mostramos el aviso para que verifique su correo
-        if (mounted) {
-          showDialog(
-              context: context,
-              barrierDismissible: false, // Evita que lo cierre tocando afuera
-              builder: (context) => AlertDialog(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                title: const Text('¡Revisa tu correo! 📩', textAlign: TextAlign.center),
-                content: const Text(
-                  'Te enviamos un enlace de verificación. Ábrelo desde tu celular o computadora. Cuando lo hayas hecho, presiona el botón de abajo.',
-                  textAlign: TextAlign.center,
-                ),
-                actions: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () {
-                        // Cierra el diálogo y automáticamente intenta iniciar sesión
-                        Navigator.pop(context);
-                        setState(() {
-                          _isLogin = true; // Lo pasamos al modo Login
-                        });
-                        _submit(); // Llamamos de nuevo a la función para que entre por el Flujo 1
-                      },
-                      style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1A1A1A),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
-                      ),
-                      child: const Text('Ya verifiqué mi correo', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      // Cierra el diálogo y lo deja en el formulario para que entre después
-                      Navigator.pop(context);
-                      setState(() {
-                        _isLogin = true;
-                        _passwordController.clear(); // Limpiamos por seguridad
-                      });
-                    },
-                    child: const Text('Lo haré más tarde', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-                  )
-                ],
-              )
-          );
+        } catch (signUpError) {
+          // Si el registro también falla, analizamos por qué
+          final errorStr = signUpError.toString().toLowerCase();
+
+          if (errorStr.contains('user already exists') || errorStr.contains('ya existe')) {
+            // El usuario SÍ existe, entonces el error de login fue porque puso mal la contraseña
+            throw Exception('La contraseña es incorrecta.');
+          } else {
+            // Es un usuario nuevo, pero puso una contraseña débil (ej. "1234")
+            throw Exception(signUpError.toString().replaceAll('Exception:', '').trim());
+          }
         }
-        return; // 🛑 Detenemos la ejecución aquí para que no siga evaluando sin token
       }
 
-      // --- 🚦 EL SEMÁFORO (Solo llega aquí si obtuvo el Token en el Flujo 1) ---
+      // --- 🚦 EL SEMÁFORO (Si llegamos aquí, es porque el login fue exitoso) ---
       if (token != null && mounted) {
         print('🚦 Consultando estado del perfil en backend...');
         final isCompleted = await _userApiService.isProfileCompleted(token);
@@ -129,7 +136,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
       }
 
     } catch (e) {
-      print('❌ ERROR AUTH0: $e');
+      print('❌ ERROR: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -159,9 +166,9 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 20),
-              Text(_isLogin ? 'Iniciar Sesión' : 'Crear Cuenta', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+              const Text('Continuar con Correo', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
               const SizedBox(height: 10),
-              Text(_isLogin ? 'Qué bueno verte de nuevo' : 'Únete a Inklop hoy mismo', style: const TextStyle(fontSize: 16, color: Colors.grey), textAlign: TextAlign.center),
+              const Text('Ingresa tu correo y contraseña para continuar', style: TextStyle(fontSize: 16, color: Colors.grey), textAlign: TextAlign.center),
               const SizedBox(height: 40),
 
               CustomInput(label: 'Correo Electrónico', hint: 'ejemplo@correo.com', controller: _emailController, focusNode: _emailFocus),
@@ -177,31 +184,9 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
                   style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1A1A1A)),
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(_isLogin ? 'Ingresar' : 'Registrarme', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      : const Text('Continuar', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
-              const SizedBox(height: 24),
-
-              // EL INTERRUPTOR PARA CAMBIAR ENTRE LOGIN Y REGISTRO
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _isLogin = !_isLogin;
-                  });
-                },
-                child: RichText(
-                  text: TextSpan(
-                    text: _isLogin ? '¿No tienes cuenta? ' : '¿Ya tienes una cuenta? ',
-                    style: const TextStyle(color: Colors.grey, fontSize: 14),
-                    children: [
-                      TextSpan(
-                        text: _isLogin ? 'Regístrate aquí' : 'Inicia sesión',
-                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-              )
             ],
           ),
         ),

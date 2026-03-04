@@ -63,6 +63,34 @@ class UserApiService {
     }
   }
 
+  // --- 4. SUBIR FOTO DE PERFIL (PUT - Multipart) ---
+  Future<bool> uploadProfileImage(String imagePath, String token) async {
+    try {
+      final url = Uri.parse('${AppConstants.apiBaseUrl}/users/images/change');
+      print('\n📸 Subiendo imagen de perfil a: $url');
+
+      // Creamos la petición Multipart para subir archivos
+      var request = http.MultipartRequest('PUT', url);
+
+      // Agregamos el Token
+      request.headers['Authorization'] = 'Bearer $token';
+
+      // Agregamos el archivo al campo 'file' (como lo pide tu Swagger)
+      request.files.add(await http.MultipartFile.fromPath('file', imagePath));
+
+      // Enviamos la petición
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+
+      print('📥 Respuesta PUT Imagen (Status ${response.statusCode}): ${response.body}\n');
+
+      return response.statusCode == 200 || response.statusCode == 201;
+    } catch (e) {
+      print('❌ Error al subir imagen de perfil: $e');
+      return false;
+    }
+  }
+
   // --- 3. VERIFICAR SI EL PERFIL YA ESTÁ COMPLETO (GET) ---
   Future<bool> isProfileCompleted(String token) async {
     try {
